@@ -1,27 +1,23 @@
-# Fine-Grained Recognition on CUB-200 with DINOv2 + Scikit-Learn
+# Fine-Grained Bird Classification on CUB-200 (DINOv2 + Linear Probe)
 
-This project implements a two-stage fine-grained recognition pipeline:
+This repository trains a linear probe on frozen DINOv2 image features for CUB-200-2011.
 
-1. Extract frozen DINOv2 features once and cache them.
-2. Train a scikit-learn LogisticRegression classifier with GridSearchCV on cached features.
+Current pipeline:
+1. Extract and cache frozen DINOv2 features (`train`, `val`, `test`) as `.npz` files.
+2. Train a scikit-learn pipeline: `StandardScaler -> LogisticRegression`.
+3. Tune `C` with `GridSearchCV` + `StratifiedKFold`.
+4. Evaluate Top-1 / Top-5 and generate analysis figures.
 
-The workflow is designed to be fast and efficient on CUB-200, leveraging pretrained DINOv2 features with a simple linear classifier.
+## Project Layout
 
-## Project Structure
-
-- `datasets/`
-  - `cub200.py`: CUB-200 dataset parser with official split + stratified val split.
-  - `transforms.py`: train/eval image transforms.
-- `models/`
-  - `dinov2.py`: frozen DINOv2 feature extractor.
-- `scripts/`
-  - `extract_features.py`: feature pre-extraction and caching.
-- `train.py`: end-to-end pipeline (auto cache + sklearn training + results.json).
-- `evaluate.py`: post-training metrics and figures.
+- `datasets/cub200.py`: CUB parser using official train/test split and a stratified per-class validation carve-out from train.
+- `datasets/transforms.py`: train/eval transforms.
+- `models/dinov2.py`: frozen DINOv2 feature extractor.
+- `scripts/extract_features.py`: standalone feature extraction and caching.
+- `train.py`: end-to-end cache check + sklearn training + `results.json`.
+- `evaluate.py`: post-training metrics and report figures.
 
 ## Requirements
-
-Install dependencies:
 
 ```bash
 pip install -r requirements.txt
@@ -29,7 +25,7 @@ pip install -r requirements.txt
 
 ## Dataset Layout
 
-Point `--data_root` to the CUB-200-2011 directory that contains:
+Pass `--data_root` as the CUB folder containing:
 
 - `images/`
 - `images.txt`
@@ -40,105 +36,94 @@ Point `--data_root` to the CUB-200-2011 directory that contains:
 Example:
 
 ```text
-/data/CUB_200_2011
+data/CUB_200_2011
 ```
 
-## Quick Start (Recommended)
+## Quick Start
 
-### 1) Run End-to-End Training
-
-This command will:
-- check/create cached features for train/test,
-- run scikit-learn GridSearchCV to find the optimal C parameter,
-- save the trained classifier,
-- save `results.json`.
+### 1) Train (end-to-end)
 
 ```bash
-python train.py --data_root data/CUB_200_2011 --model_variant vitb14 --output_dir ./runs/cub_vitb14
+python train.py --data_root data/CUB_200_2011 --model_variant vitb14 --output_dir runs/cub_vitb14
 ```
 
-### 2) Run Evaluation + Figures
+What `train.py` does:
+- ensures `train_features.npz`, `val_features.npz`, and `test_features.npz` exist in `--cache_dir` (extracts missing splits automatically),
+- runs GridSearchCV over `classifier__C` with `StratifiedKFold`,
+- reports test Top-1 and Top-5,
+- prompts for confirmation if Top-1 is below 75%,
+- saves:
+  - `runs/.../sklearn_classifier.pkl`
+  - `runs/.../results.json`
 
-This command computes final metrics and writes report-ready figures to `./runs/cub_vitb14/figures/`.
+### 2) Evaluate + Generate Figures
 
 ```bash
-python evaluate.py --data_root data/CUB_200_2011 --run_dir ./runs/cub_vitb14 --cache_dir ./cache
+python evaluate.py --data_root data/CUB_200_2011 --run_dir runs/cub_vitb14 --cache_dir cache
 ```
 
-## Script-by-Script Usage
+This computes Top-1/Top-5 from the saved sklearn model and writes figures to `runs/.../figures`.
 
-## A) Feature Extraction
+## Script Usage
+
+### `scripts/extract_features.py`
 
 Extract one split at a time:
 
 ```bash
-python scripts/extract_features.py --data_root data/CUB_200_2011 --split train --model_variant vitb14 --batch_size 128 --output_dir ./cache
-python scripts/extract_features.py --data_root data/CUB_200_2011 --split test  --model_variant vitb14 --batch_size 128 --output_dir ./cache
+python scripts/extract_features.py --data_root data/CUB_200_2011 --split train --model_variant vitb14 --batch_size 128 --output_dir cache
+python scripts/extract_features.py --data_root data/CUB_200_2011 --split val   --model_variant vitb14 --batch_size 128 --output_dir cache
+python scripts/extract_features.py --data_root data/CUB_200_2011 --split test  --model_variant vitb14 --batch_size 128 --output_dir cache
 ```
 
-Outputs:
-- `./cache/train_features.npz`
-- `./cache/test_features.npz`
-
-Each `.npz` contains:
+Each output `.npz` contains:
 - `features`: L2-normalized feature matrix
-- `labels`: class IDs
+- `labels`: integer class IDs (0-based)
 
-## B) End-to-End Training
+### `train.py`
 
-Main options:
+Main flags:
+- `--data_root` (required)
+- `--model_variant` (`vits14`, `vitb14`, `vitl14`; default `vitb14`)
+- `--output_dir` (default `./runs/cub_vitb14`)
+- `--cache_dir` (default `./cache`)
+- `--feature_batch_size` (default `128`)
+- `--device` (`auto`, `cpu`, `cuda`; default `auto`)
+- `--cv_folds` (default `5`)
 
-- `--data_root`: CUB dataset root (required)
-- `--model_variant`: `vits14`, `vitb14`, `vitl14` (default: `vitb14`)
-- `--output_dir`: run directory for model, results (default: `./runs/cub_vitb14`)
-- `--cache_dir`: cached features directory (default: `./cache`)
-- `--feature_batch_size`: extraction batch size (default 128)
-- `--device`: `auto`, `cpu`, `cuda` (default: `auto`)
-- `--cv_folds`: GridSearchCV folds for C sweep (default: 5)
+Current `C` sweep in code:
+- `[15.0, 17.5, 20.0, 22.5]`
 
-Example:
+### `evaluate.py`
 
-```bash
-python train.py --data_root data/CUB_200_2011 --model_variant vitb14 --output_dir ./runs/cub_vitb14 --cv_folds 5
-```
+Main flags:
+- `--data_root` (required)
+- `--run_dir` (required)
+- `--cache_dir` (default `./cache`)
+- `--model` (optional explicit model path)
+- `--tsne_color_mode` (`class` or `order`, default `class`)
+- `--order_map_json` (optional JSON map used when `--tsne_color_mode order`)
+- `--tsne_samples` (default `1500`)
+- `--seed` (default `42`)
 
-## C) Evaluation and Visualization
-
-`evaluate.py` produces:
-
-- Test Top-1 / Top-5 (printed and saved to results)
-- Full confusion matrix (`confusion_matrix_full.npy`)
-- Top-15 confused class-pair heatmap (`confusions_top15_heatmap.png`)
-- t-SNE on balanced 1500 test samples (`tsne_test_features.png`)
-- 20 lowest per-class accuracies (`per_class_lowest20.png`)
-
-Default usage:
+Optional order-colored t-SNE:
 
 ```bash
-python evaluate.py --data_root data/CUB_200_2011 --run_dir ./runs/cub_vitb14 --cache_dir ./cache
+python evaluate.py --data_root data/CUB_200_2011 --run_dir runs/cub_vitb14 --cache_dir cache --tsne_color_mode order --order_map_json order_map.json
 ```
 
-Optional t-SNE coloring by bird order groups:
+## Outputs
 
-```bash
-python evaluate.py --data_root data/CUB_200_2011 --run_dir ./runs/cub_vitb14 --cache_dir ./cache --tsne_color_mode order --order_map_json ./order_map.json
+### Cache directory
+
+```text
+cache/
+  train_features.npz
+  val_features.npz
+  test_features.npz
 ```
 
-`order_map.json` can map either class index strings or short class names to an order/group label.
-
-Example:
-
-```json
-{
-  "0": "Procellariiformes",
-  "1": "Passeriformes",
-  "Black footed Albatross": "Procellariiformes"
-}
-```
-
-## Output Files
-
-Typical run directory contents:
+### Run directory
 
 ```text
 runs/cub_vitb14/
@@ -151,38 +136,7 @@ runs/cub_vitb14/
     per_class_lowest20.png
 ```
 
-## Results Summary
+## Notes
 
-After running `train.py` and `evaluate.py`, `results.json` will contain:
-
-```json
-{
-  "model_variant": "vitb14",
-  "dataset": "CUB-200-2011",
-  "classifier": "sklearn-logreg",
-  "best_c": 1.0,
-  "test_top1": 0.85,
-  "total_training_time_sec": 45.2,
-  "hyperparameters": {
-    "model": "LogisticRegression",
-    "max_iter": 1000,
-    "solver": "lbfgs",
-    "multi_class": "multinomial",
-    "c_values": [0.01, 0.1, 1.0, 10.0],
-    "cv_folds": 5
-  },
-  "grid_search_results": {
-    "best_params": {"C": 1.0},
-    "best_score": 0.84,
-    "cv_results": {...}
-  }
-}
-```
-    val_top1_curve.png
-```
-
-## Optional: View TensorBoard
-
-```bash
-tensorboard --logdir ./runs/cub_vitb14/tensorboard
-```
+- There is no training-curve artifact (for example, no `val_top1_curve.png`) in the current pipeline.
+- `results.json` is written by `train.py` and updated by `evaluate.py` with final evaluation fields.
