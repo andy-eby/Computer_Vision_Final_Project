@@ -138,5 +138,4 @@ runs/cub_vitb14/
 
 ## Notes
 
-- There is no training-curve artifact (for example, no `val_top1_curve.png`) in the current pipeline.
 - `results.json` is written by `train.py` and updated by `evaluate.py` with final evaluation fields.
